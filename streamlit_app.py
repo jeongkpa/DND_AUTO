@@ -9,7 +9,7 @@ def get_ai_generated_text(form_data: dict) -> str:
         if isinstance(form_data[key], str):
             form_data[key] = form_data[key].replace('**', '').replace('#', '')
     
-    webhook_url = "http://203.239.132.7:5678/webhook/3ccfd480-71e7-4d1e-b264-69a651180350"
+    webhook_url = "https://geniefy.app.n8n.cloud/webhook/3ccfd480-71e7-4d1e-b264-69a651180350"
     
     try:
         # webhook으로 데이터 전송
