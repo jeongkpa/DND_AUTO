@@ -122,7 +122,7 @@ def show_product_release_form():
     # 7. 주요 특징(세일즈 포인트)
     innovation = st.text_area(
         "7. **주요 특징(세일즈 포인트)** *",
-        placeholder="예시)  \n27인치에 적합한 해상도인 QHD(2560*1440) 해상도\n- 광시야각 SS IPS\n- 180Hz의 고주사율\n- 응답속도 1ms(MPRT)\n- G-싱크 및 프리싱크 호환\n- DCI-P3 95%의 색재현율\n- 10비트 컬러, VESA HDR 400 지원\n- KVM스위치 내장\n- 3년 무상의 A/S 보증 서비스",
+        placeholder="예시)  \- n27인치에 적합한 해상도인 QHD(2560*1440) 해상도\n- 광시야각 SS IPS\n- 180Hz의 고주사율\n- 응답속도 1ms(MPRT)\n- G-싱크 및 프리싱크 호환\n- DCI-P3 95%의 색재현율\n- 10비트 컬러, VESA HDR 400 지원\n- KVM스위치 내장\n- 3년 무상의 A/S 보증 서비스",
         height=100
     )
     
