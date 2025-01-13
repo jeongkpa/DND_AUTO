@@ -1,8 +1,12 @@
 import streamlit as st
 from jinja_utils import generate_press_release_html
 import requests
+import json
 
-def get_ai_generated_text(form_data: dict) -> str:
+# 디버깅 모드 플래그
+DEBUG_MODE = False  # 임시로 True로 설정
+
+def get_ai_generated_text(form_data: dict) -> dict:
     """n8n webhook을 통해 AI 생성된 보도자료 텍스트를 받아옵니다."""
     # 입력 데이터에서 마크다운 볼드 표시와 헤더 표시 제거
     for key in form_data:
@@ -14,35 +18,96 @@ def get_ai_generated_text(form_data: dict) -> str:
     try:
         # webhook으로 데이터 전송
         with st.spinner("AI가 보도자료를 생성하고 있습니다..."):
-            response = requests.post(webhook_url, json=form_data, timeout=10)
+            response = requests.post(webhook_url, json=form_data, timeout=20)
         
         if response.status_code == 200:
-            # Content-Type이 text/html인 경우 텍스트로 처리
-            if 'text/html' in response.headers.get('Content-Type', ''):
-                st.success("보도자료가 성공적으로 생성되었습니다!")
-                # 마크다운 형식의 텍스트에서 불필요한 마크다운 기호 제거
-                text = response.text.replace('##', '').replace('#', '').replace('**', '').strip()
-                return text
+            if DEBUG_MODE:
+                st.write("### 디버깅: 서버 응답 정보")
+                st.write(f"Status Code: {response.status_code}")
+                st.write(f"Content-Type: {response.headers.get('Content-Type', 'Not specified')}")
+                st.write("Response Text:")
+                st.code(response.text)
             
-            # JSON 응답 처리 시도
+            # Content-Type 확인
+            content_type = response.headers.get('Content-Type', '')
+            
             try:
-                result = response.json()
-                if "generated_text" in result:
-                    # JSON 응답에서도 마크다운 기호 제거
-                    return result["generated_text"].replace('##', '').replace('#', '').replace('**', '')
-            except ValueError:
-                # JSON 파싱 실패 시 텍스트 그대로 반환 (마크다운 기호 제거)
-                return response.text.replace('##', '').replace('#', '').replace('**', '')
+                if 'application/json' in content_type:
+                    # JSON 응답 처리
+                    result = response.json()
+                    if DEBUG_MODE:
+                        st.write("### 디버깅: 파싱된 JSON 데이터")
+                        st.json(result)
+                    
+                    # 배열로 온 경우 첫 번째 항목 사용
+                    if isinstance(result, list):
+                        result = result[0]
+                    
+                    title = result.get("title", "").strip()
+                    news_data = result.get("news_data", "").strip()
+                    check_data = result.get("check_data", "").strip()
+                    insta_data = result.get("insta_data", "").strip()  # 인스타 데이터 추가
+                else:
+                    # 일반 텍스트 응답 처리
+                    response_text = response.text.strip()
+                    
+                    # 응답 텍스트에서 첫 줄을 제목으로 사용
+                    lines = response_text.split('\n')
+                    title = lines[0].strip()
+                    news_data = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
+                    check_data = ""
+                    insta_data = ""  # 인스타 데이터 빈 값으로 초기화
+                
+                st.success("보도자료가 성공적으로 생성되었습니다!")
+                
+                # 필수 필드 검증
+                if not title or not news_data:
+                    if DEBUG_MODE:
+                        st.error("### 디버깅: 필수 필드 누락")
+                        st.write(f"title 존재: {bool(title)}")
+                        st.write(f"news_data 존재: {bool(news_data)}")
+                    
+                    # 폴백: 기본 템플릿 사용
+                    return generate_fallback_template(form_data)
+                
+                return {
+                    "title": title,
+                    "news_data": news_data,
+                    "check_data": check_data,
+                    "insta_data": insta_data  # 인스타 데이터 추가
+                }
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                if DEBUG_MODE:
+                    st.error(f"### 디버깅: 응답 처리 오류")
+                    st.write(f"Error type: {type(e).__name__}")
+                    st.write(f"Error message: {str(e)}")
+                    st.write("Raw response:")
+                    st.code(response.text)
+                st.error("서버 응답을 처리하는 중 오류가 발생했습니다.")
+                # 폴백: 기본 템플릿 사용
+                return generate_fallback_template(form_data)
         else:
+            if DEBUG_MODE:
+                st.error(f"### 디버깅: HTTP 오류")
+                st.write(f"Status code: {response.status_code}")
+                st.write(f"Response text: {response.text}")
             st.error(f"서버 오류: {response.status_code}")
-            return None
+            # 폴백: 기본 템플릿 사용
+            return generate_fallback_template(form_data)
             
     except requests.exceptions.RequestException as e:
+        if DEBUG_MODE:
+            st.error("### 디버깅: 요청 오류")
+            st.write(f"Error type: {type(e).__name__}")
+            st.write(f"Error message: {str(e)}")
         st.error(f"Webhook 호출 중 오류가 발생했습니다: {str(e)}")
         st.error("n8n 서버 연결을 확인해주세요 (http://203.239.132.7:5678)")
-        return None
-    
-    # webhook 호출이 실패하거나 응답이 올바르지 않은 경우 기존 템플릿 사용
+        # 폴백: 기본 템플릿 사용
+        return generate_fallback_template(form_data)
+
+def generate_fallback_template(form_data: dict) -> dict:
+    """폴백: 기본 템플릿을 생성합니다."""
     if form_data["보도자료_유형"] == "제품 출시/리뷰 보도자료":
         generated_text = f"""{form_data['도입부']}은(는) {form_data['출시일']}에 {form_data['제품명']}을(를) 출시한다고 발표했습니다.
 
@@ -77,7 +142,12 @@ def get_ai_generated_text(form_data: dict) -> str:
 아래 연락처로 부탁 드립니다.
 
 감사합니다."""
-    return generated_text
+    
+    return {
+        "title": form_data["제목"],
+        "news_data": generated_text,
+        "check_data": ""
+    }
 
 def show_product_release_form():
     """제품 출시/리뷰 보도자료 폼을 표시합니다."""
@@ -256,10 +326,10 @@ def get_required_fields(release_type: str) -> list:
             "대상 제품"
         ]
 
-def show_result(generated_text, form_data, container):
+def show_result(generated_data, form_data, container):
     """생성된 보도자료 결과를 표시합니다."""
     with container:
-        # 결과 영역에 여백 추가
+        # 스타일 정의
         st.markdown("""
             <style>
                 .stTabs [data-baseweb="tab-panel"] {
@@ -280,6 +350,21 @@ def show_result(generated_text, form_data, container):
                 table {
                     width: 100% !important;
                 }
+                /* 인스타그램 포스팅 스타일 */
+                .instagram-post {
+                    background: white;
+                    border: 1px solid #dbdbdb;
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin: 20px 0;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                }
+                .instagram-post pre {
+                    white-space: pre-wrap;
+                    font-family: inherit;
+                    margin: 0;
+                    padding: 10px;
+                }
             </style>
         """, unsafe_allow_html=True)
         
@@ -289,8 +374,8 @@ def show_result(generated_text, form_data, container):
         with tab1:
             st.subheader("HTML 미리보기")
             rendered_html = generate_press_release_html(
-                title=form_data["제목"],
-                body_text=generated_text
+                title=generated_data["title"],
+                body_text=generated_data["news_data"]
             )
             # HTML 컨텐츠를 좌측 정렬하고 너비를 늘림
             st.components.v1.html(
@@ -305,44 +390,82 @@ def show_result(generated_text, form_data, container):
                 scrolling=True
             )
             
+            # 다운로드 버튼 섹션
+            st.markdown("---")
+            st.subheader("파일 다운로드")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # 텍스트 파일에는 제목과 본문을 함께 포함
+                full_text = f"{generated_data['title']}\n\n{generated_data['news_data']}"
+                st.download_button(
+                    label="📄 보도자료 텍스트(.txt)",
+                    data=full_text.encode("utf-8"),
+                    file_name="press_release.txt",
+                    mime="text/plain",
+                    key="download_txt"
+                )
+
+            with col2:
+                st.download_button(
+                    label="🌐 보도자료 HTML(.html)",
+                    data=generate_press_release_html(
+                        title=generated_data["title"],
+                        body_text=generated_data["news_data"]
+                    ).encode("utf-8"),
+                    file_name="press_release.html",
+                    mime="text/html",
+                    key="download_html"
+                )
+            
+            # 인스타그램 포스팅 미리보기
+            if generated_data.get("insta_data"):
+                st.markdown("---")
+                st.subheader("인스타그램 포스팅 미리보기")
+                with st.expander("인스타그램 포스팅 보기", expanded=False):
+                    posts = generated_data["insta_data"].strip().split("\n\n\n")
+                    for i, post in enumerate(posts, 1):
+                        if post.strip():
+                            st.markdown(f"""
+                                <div class="instagram-post">
+                                    <h4>포스팅 {i}</h4>
+                                    <pre>{post.strip()}</pre>
+                                </div>
+                            """, unsafe_allow_html=True)
+            
+            # 검증 데이터가 있는 경우 표시
+            if generated_data["check_data"]:
+                st.markdown("---")
+                st.subheader("입력 데이터 검증 결과")
+                st.markdown(generated_data["check_data"])
+            
         with tab2:
             st.subheader("생성된 보도자료")
             st.markdown("---")
-            # 텍스트 미리보기에 여백 추가
+            # 제목 표시
+            st.markdown(f"**제목:** {generated_data['title']}")
+            st.markdown("---")
+            # 본문 표시
             st.markdown(
                 f"""<div style="padding: 4rem;">
-                    {generated_text.replace(chr(10), "<br>")}
+                    {generated_data['news_data'].replace(chr(10), "<br>")}
                 </div>""",
                 unsafe_allow_html=True
             )
             st.markdown("---")
-        
-        # 다운로드 버튼 섹션에 여백 추가
-        st.markdown("<div style='padding: 4rem 0;'>", unsafe_allow_html=True)
-        st.subheader("파일 다운로드")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.download_button(
-                label="📄 보도자료 텍스트(.txt)",
-                data=generated_text.encode("utf-8"),
-                file_name="press_release.txt",
-                mime="text/plain",
-                key="download_txt"
-            )
-
-        with col2:
-            st.download_button(
-                label="🌐 보도자료 HTML(.html)",
-                data=generate_press_release_html(
-                    title=form_data["제목"],
-                    body_text=generated_text
-                ).encode("utf-8"),
-                file_name="press_release.html",
-                mime="text/html",
-                key="download_html"
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
+            
+            # 인스타그램 포스팅 표시
+            if generated_data.get("insta_data"):
+                st.subheader("인스타그램 포스팅")
+                with st.expander("인스타그램 포스팅 보기", expanded=False):
+                    st.markdown(generated_data["insta_data"])
+                st.markdown("---")
+            
+            # 검증 데이터가 있는 경우 표시
+            if generated_data["check_data"]:
+                st.subheader("입력 데이터 검증 결과")
+                st.markdown(generated_data["check_data"])
+                st.markdown("---")
 
 def main():
     # 페이지 레이아웃을 centered 모드로 변경 (wide -> centered)
@@ -366,8 +489,8 @@ def main():
     st.title("보도자료 기사 AI 자동 생성")
     
     # 세션 상태 초기화
-    if "generated_text" not in st.session_state:
-        st.session_state["generated_text"] = None
+    if "generated_data" not in st.session_state:
+        st.session_state["generated_data"] = None
     if "form_data" not in st.session_state:
         st.session_state["form_data"] = {}
     
@@ -430,16 +553,17 @@ def main():
                 form_data["맺음말"] = "많은 관심과 참여 부탁드립니다"
         
         # AI 생성 요청
-        generated_text = get_ai_generated_text(form_data)
+        generated_data = get_ai_generated_text(form_data)
         
         # 세션 상태에 텍스트와 폼 데이터를 저장
-        st.session_state["generated_text"] = generated_text
-        st.session_state["form_data"] = form_data
+        if generated_data:
+            st.session_state["generated_data"] = generated_data
+            st.session_state["form_data"] = form_data
     
     # 세션 상태에 저장된 텍스트가 있을 경우 결과 표시
-    if st.session_state["generated_text"]:
+    if st.session_state["generated_data"]:
         show_result(
-            st.session_state["generated_text"], 
+            st.session_state["generated_data"], 
             st.session_state["form_data"], 
             result_container
         )
